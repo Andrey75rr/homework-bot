@@ -6,6 +6,7 @@ import time
 import requests
 from dotenv import load_dotenv
 from telebot import TeleBot
+from http import HTTPStatus
 
 
 load_dotenv()
@@ -36,7 +37,21 @@ logging.basicConfig(
 
 def check_tokens():
     """Проверяет доступность обязательных переменных окружения."""
-    return all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID])
+    tokens_ok = True
+
+    if not PRACTICUM_TOKEN:
+        logging.critical('Отсутствует переменная окружения: PRACTICUM_TOKEN')
+        tokens_ok = False
+
+    if not TELEGRAM_TOKEN:
+        logging.critical('Отсутствует переменная окружения: TELEGRAM_TOKEN')
+        tokens_ok = False
+
+    if not TELEGRAM_CHAT_ID:
+        logging.critical('Отсутствует переменная окружения: TELEGRAM_CHAT_ID')
+        tokens_ok = False
+
+    return tokens_ok
 
 
 def send_message(bot, message):
@@ -53,65 +68,59 @@ def send_message(bot, message):
 
 def get_api_answer(timestamp):
     """Делает запрос к API-сервису."""
+    params = {'from_date': timestamp}
     try:
-        params = {'from_date': timestamp}
         response = requests.get(
             ENDPOINT,
             headers=HEADERS,
             params=params
         )
-        if response.status_code != 200:
-            raise Exception(f"API вернул код состояния {response.status_code}")
-        return response.json()
     except requests.exceptions.RequestException as error:
         logging.error(f'Ошибка соединения с API: {error}')
+        raise Exception(f'Ошибка запроса к API: {error}')
+
+    if response.status_code != HTTPStatus.OK:
+        raise Exception(f"API вернул код состояния {response.status_code}")
+    return response.json()
 
 
 def check_response(response):
     """Проверяет ответ API на соответствие документации."""
-    try:
-        if not isinstance(response, dict):
-            raise TypeError('Ответ API должен быть словарем')
-        if 'homeworks' not in response:
-            raise KeyError('В ответе API отсутствует ключ homeworks')
-        homeworks = response['homeworks']
-        if not isinstance(homeworks, list):
-            raise TypeError('homeworks должен быть списком')
-        if homeworks is None:
-            raise KeyError('homeworks не может быть None')
-        return homeworks
-    except (TypeError, KeyError) as error:
-        logging.error(f'Неверная структура ответа API: {error}')
-        raise
+    if not isinstance(response, dict):
+        raise TypeError('Ответ API должен быть словарем')
+    if 'homeworks' not in response:
+        raise KeyError('В ответе API отсутствует ключ homeworks')
+    homeworks = response['homeworks']
+    if not isinstance(homeworks, list):
+        raise TypeError('homeworks должен быть списком')
+    return homeworks
 
 
 def parse_status(homework):
     """Извлекает статус домашней работы и возвращает сообщение."""
-    try:
-        homework_name = homework.get('homework_name')
-        homework_status = homework.get('status')
-        if not homework_name or not homework_status:
-            raise KeyError('В ответе отсутствуют обязательные поля')
-        if homework_status not in HOMEWORK_VERDICTS:
-            raise ValueError(f'Неизвестный статус работы: {homework_status}')
-        verdict = HOMEWORK_VERDICTS[homework_status]
+    if 'homework_name' not in homework or 'status' not in homework:
+        raise KeyError('В ответе отсутствуют обязательные поля')
 
-        return f'Изменился статус проверки работы "{homework_name}". {verdict}'
-    except (KeyError, ValueError) as error:
-        logging.error(f'Ошибка парсинга статуса: {error}')
-        raise
+    homework_name = homework['homework_name']
+    homework_status = homework['status']
+
+    if homework_status not in HOMEWORK_VERDICTS:
+        raise ValueError(f'Неизвестный статус работы: {homework_status}')
+
+    verdict = HOMEWORK_VERDICTS[homework_status]
+    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def main():
     """Основная логика работы бота."""
+    if not check_tokens():
+        logging.critical('Отсутствуют обязательные переменные окружения')
+        exit(1)
+
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     previous_status = None
     previous_error = None
-
-    if not check_tokens():
-        logging.critical('Отсутствуют обязательные переменные окружения')
-        exit(1)
 
     while True:
         try:
